@@ -398,6 +398,7 @@ static void usage(void) {
  " -h, --help                     Print this message\n"
  " -c, --counter-based            Set up counter-based (HOTP) verification\n"
  " -t, --time-based               Set up time-based (TOTP) verification\n"
+ " -H, --SHA{1,256}               Set hash algorithm. Default is SHA1\n"
  " -d, --disallow-reuse           Disallow reuse of previously used TOTP tokens\n"
  " -D, --allow-reuse              Allow reuse of previously used TOTP tokens\n"
  " -f, --force                    Write file without first confirming with user\n"

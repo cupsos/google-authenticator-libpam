@@ -51,6 +51,7 @@
 #include "base32.h"
 #include "hmac.h"
 #include "sha1.h"
+#include "sha256.h"
 
 #define MODULE_NAME   "pam_google_authenticator"
 #define SECRET        "~/.google_authenticator"
@@ -1226,10 +1227,21 @@ int compute_code(const uint8_t *secret, int secretLen, unsigned long value) {
   for (int i = 8; i--; value >>= 8) {
     val[i] = value;
   }
-  uint8_t hash[SHA1_DIGEST_LENGTH];
-  hmac_sha1(secret, secretLen, val, 8, hash, SHA1_DIGEST_LENGTH);
+  uint8_t hash[SHA256_DIGEST_LENGTH];
+  int offset;
+
+  if(secretLen > 48)
+  {
+    hmac_sha256(secret, secretLen, val, 8, hash, SHA256_DIGEST_LENGTH);
+    offset = hash[SHA256_DIGEST_LENGTH - 1] & 0xF;
+  }
+  else
+  {
+    hmac_sha1(secret, secretLen, val, 8, hash, SHA1_DIGEST_LENGTH);
+    offset = hash[SHA1_DIGEST_LENGTH - 1] & 0xF;  
+  }
+
   memset(val, 0, sizeof(val));
-  const int offset = hash[SHA1_DIGEST_LENGTH - 1] & 0xF;
   unsigned int truncatedHash = 0;
   for (int i = 0; i < 4; ++i) {
     truncatedHash <<= 8;
