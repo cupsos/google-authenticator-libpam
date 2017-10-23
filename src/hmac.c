@@ -19,6 +19,7 @@
 
 #include "hmac.h"
 #include "sha1.h"
+#include "sha256.h"
 
 void hmac_sha1(const uint8_t *key, int keyLength,
                const uint8_t *data, int dataLength,
@@ -76,4 +77,61 @@ void hmac_sha1(const uint8_t *key, int keyLength,
   memset(hashed_key, 0, sizeof(hashed_key));
   memset(sha, 0, sizeof(sha));
   memset(tmp_key, 0, sizeof(tmp_key));
+}
+
+void hmac_sha256(uint8_t *key, int keyLength,
+  uint8_t *data, unsigned int dataLength,
+  uint8_t *result, int resultLength) {
+sha256_context ctx;
+uint8_t hashed_key[SHA256_DIGEST_LENGTH];
+
+if (keyLength > SHA256_BLOCKSIZE) {
+// The key can be no bigger than 64 bytes. If it is, we'll hash it down to
+// 32 bytes.
+sha256_starts(&ctx);
+sha256_update(&ctx, key, keyLength);
+sha256_finish(&ctx, hashed_key);
+key = hashed_key;
+keyLength = SHA256_DIGEST_LENGTH;
+}
+
+// The key for the inner digest is derived from our key, by padding the key
+// the full length of 64 bytes, and then XOR'ing each byte with 0x36.
+uint8_t tmp_key[SHA256_BLOCKSIZE];
+for (int i = 0; i < keyLength; ++i) {
+tmp_key[i] = key[i] ^ 0x36;
+}
+memset(tmp_key + keyLength, 0x36, SHA256_BLOCKSIZE - keyLength);
+
+// Compute inner digest
+sha256_starts(&ctx);
+sha256_update(&ctx, tmp_key, SHA256_BLOCKSIZE);
+sha256_update(&ctx, data, dataLength);
+uint8_t sha[SHA256_DIGEST_LENGTH];
+sha256_finish(&ctx, sha);
+
+// The key for the outer digest is derived from our key, by padding the key
+// the full length of 64 bytes, and then XOR'ing each byte with 0x5C.
+for (int i = 0; i < keyLength; ++i) {
+tmp_key[i] = key[i] ^ 0x5C;
+}
+memset(tmp_key + keyLength, 0x5C, SHA256_BLOCKSIZE - keyLength);
+
+// Compute outer digest
+sha256_starts(&ctx);
+sha256_update(&ctx, tmp_key, SHA256_BLOCKSIZE);
+sha256_update(&ctx, sha, SHA256_DIGEST_LENGTH);
+sha256_finish(&ctx, sha);
+
+// Copy result to output buffer and truncate or pad as necessary
+memset(result, 0, resultLength);
+if (resultLength > SHA256_DIGEST_LENGTH) {
+resultLength = SHA256_DIGEST_LENGTH;
+}
+memcpy(result, sha, resultLength);
+
+// Zero out all internal data structures
+memset(hashed_key, 0, sizeof(hashed_key));
+memset(sha, 0, sizeof(sha));
+memset(tmp_key, 0, sizeof(tmp_key));
 }

@@ -25,4 +25,9 @@ void hmac_sha1(const uint8_t *key, int keyLength,
                uint8_t *result, int resultLength)
  __attribute__((visibility("hidden")));
 
+ void hmac_sha256(uint8_t *key, int keyLength,
+    uint8_t *data, unsigned int dataLength,
+    uint8_t *result, int resultLength)
+__attribute__((visibility("hidden")));
+
 #endif /* _HMAC_H_ */

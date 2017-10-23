@@ -17,7 +17,7 @@ CORE_SRC  =
 CORE_SRC += src/base32.h src/base32.c
 CORE_SRC += src/hmac.h   src/hmac.c
 CORE_SRC += src/sha1.h   src/sha1.c
-
+CORE_SRC += src/sha256.h src/sha256.c
 
 google_authenticator_SOURCES = \
 	src/google-authenticator.c \
