@@ -44,10 +44,12 @@
 #define SCRATCHCODE_LENGTH        8           // Eight digits per scratchcode
 #define BYTES_PER_SCRATCHCODE     4           // 32bit of randomness is enough
 #define BITS_PER_BASE32_CHAR      5           // Base32 expands space by 8/5
+#define SHA1                      0
+#define SHA256                    1
 
 static enum { QR_UNSET=0, QR_NONE, QR_ANSI, QR_UTF8 } qr_mode = QR_UNSET;
 
-static int generateCode(const char *key, unsigned long tm) {
+static int generateCode(const char *key, unsigned long tm, const short hash_mode) {
   uint8_t challenge[8];
   for (int i = 8; i--; tm >>= 8) {
     challenge[i] = tm;
@@ -72,12 +74,25 @@ static int generateCode(const char *key, unsigned long tm) {
   }
 
   // Compute the HMAC_SHA1 of the secret and the challenge.
-  uint8_t hash[SHA1_DIGEST_LENGTH];
-  hmac_sha1(secret, secretLen, challenge, 8, hash, SHA1_DIGEST_LENGTH);
-
   // Pick the offset where to sample our hash value for the actual verification
   // code.
-  const int offset = hash[SHA1_DIGEST_LENGTH - 1] & 0xF;
+  uint8_t hash[SHA256_DIGEST_LENGTH];
+  int offset;
+  switch (hash_mode)
+  {
+  case SHA1:
+    hmac_sha1(secret, secretLen, challenge, 8, hash, SHA1_DIGEST_LENGTH);
+    offset = hash[SHA1_DIGEST_LENGTH - 1] & 0xF;
+    break;
+  case SHA256:
+    hmac_sha256(secret, secretLen, challenge, 8, hash, SHA256_DIGEST_LENGTH);
+    offset = hash[SHA256_DIGEST_LENGTH - 1] & 0xF;
+    break;
+  default:
+    fprintf(stderr, "Invalid hash mode : %d\n", hash_mode);
+    _exit(1);
+    break;
+  }
 
   // Compute the truncated hash in a byte-order independent loop.
   unsigned int truncatedHash = 0;
@@ -398,8 +413,8 @@ static void usage(void) {
  "google-authenticator [<options>]\n"
  " -h, --help                     Print this message\n"
  " -c, --counter-based            Set up counter-based (HOTP) verification\n"
- " -t, --time-based               Set up time-based (TOTP) verification\n"
- " -H, --SHA={1,256}              Set hash algorithm. Default is SHA1\n"
+ " -t, --time-based={sha1,sha256} Set up time-based (TOTP) verification\n"
+ "                                Default hash algorithm is sha1\n"
  " -d, --disallow-reuse           Disallow reuse of previously used TOTP tokens\n"
  " -D, --allow-reuse              Allow reuse of previously used TOTP tokens\n"
  " -f, --force                    Write file without first confirming with user\n"
@@ -437,8 +452,8 @@ int main(int argc, char *argv[]) {
 
   enum { ASK_MODE, HOTP_MODE, TOTP_MODE } mode = ASK_MODE;
   enum { ASK_REUSE, DISALLOW_REUSE, ALLOW_REUSE } reuse = ASK_REUSE;
-  enum { SHA1 = 0, SHA256 = 1 } hash_mode = SHA1;
-  static const char *hash_str[] = { "SHA1", "SHA256" };
+  short hash_mode = SHA1;
+  static const char *hash_str[] = { "sha1", "sha256" };
   int force = 0, quiet = 0;
   int r_limit = 0, r_time = 0;
   char *secret_fn = NULL;
@@ -449,12 +464,11 @@ int main(int argc, char *argv[]) {
   int emergency_codes = -1;
   int idx;
   for (;;) {
-    static const char optstring[] = "+hctH:dDfl:i:qQ:r:R:us:S:w:We:";
+    static const char optstring[] = "+hct::dDfl:i:qQ:r:R:us:S:w:We:";
     static struct option options[] = {
       { "help",             0, 0, 'h' },
       { "counter-based",    0, 0, 'c' },
-      { "time-based",       0, 0, 't' },
-      { "SHA",              1, 0, 'H' },
+      { "time-based",       2, 0, 't' },
       { "disallow-reuse",   0, 0, 'd' },
       { "allow-reuse",      0, 0, 'D' },
       { "force",            0, 0, 'f' },
@@ -512,21 +526,22 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Duplicate -c and/or -t option detected\n");
         _exit(1);
       }
+      printf("optarg = %s\n", optarg);
+      if(optarg != NULL)
+      {
+        if (!strcasecmp(optarg, hash_str[0])){
+          hash_mode = SHA1;
+        }
+        else if (!strcasecmp(optarg, hash_str[1])){
+          hash_mode = SHA256;
+        }
+        else{
+          fprintf(stderr, "Invalid hash algorithm : %s\n", optarg);
+          _exit(1);
+        }
+      }
       mode = TOTP_MODE;
     } else if (!idx--) {
-      // hash
-      if (!strcmp(optarg, "1")){
-        hash_mode = SHA1;
-      }
-      else if (!strcmp(optarg, "256")){
-        hash_mode = SHA256;
-      }
-      else{
-        fprintf(stderr, "Not valid hash type\n");
-        _exit(1);
-      }
-    }
-    else if (!idx--) {
       // disallow-reuse
       if (reuse != ASK_REUSE) {
         fprintf(stderr, "Duplicate -d and/or -D option detected\n");
@@ -761,7 +776,7 @@ int main(int argc, char *argv[]) {
     displayEnrollInfo(secret, label, use_totp, issuer);
     printf("Your hash algorithm is: %s\n", hash_str[hash_mode]);
     printf("Your new secret key is: %s\n", secret);
-    printf("Your verification code is %06d\n", generateCode(secret, 0));
+    printf("Your verification code is %06d\n", generateCode(secret, 0, hash_mode));
     printf("Your emergency scratch codes are:\n");
   }
   free(label);
