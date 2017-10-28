@@ -434,6 +434,7 @@ static void usage(void) {
 
 int main(int argc, char *argv[]) {
   uint8_t buf[SECRET_BITS/8 + MAX_SCRATCHCODES*BYTES_PER_SCRATCHCODE];
+  static const char hash[]      = "\" SHA256\n";
   static const char hotp[]      = "\" HOTP_COUNTER 1\n";
   static const char totp[]      = "\" TOTP_AUTH\n";
   static const char disallow[]  = "\" DISALLOW_REUSE\n";
@@ -442,6 +443,7 @@ int main(int argc, char *argv[]) {
   static const char ratelimit[] = "\" RATE_LIMIT 3 30\n";
   char secret[(SECRET_BITS + BITS_PER_BASE32_CHAR-1)/BITS_PER_BASE32_CHAR +
               1 /* newline */ +
+              sizeof(hash) +
               sizeof(hotp) +  // hotp and totp are mutually exclusive.
               sizeof(disallow) +
               sizeof(step) +
@@ -787,6 +789,13 @@ int main(int argc, char *argv[]) {
   } else {
     strcat(secret, hotp);
   }
+  if (hash_mode == SHA1) {
+    strcat(secret, "\" SHA""1\n");
+  }
+  else if (hash_mode == SHA256) {
+    strcat(secret, "\" SHA""256\n");
+  }
+
   for (int i = 0; i < emergency_codes; ++i) {
   new_scratch_code:;
     int scratch = 0;

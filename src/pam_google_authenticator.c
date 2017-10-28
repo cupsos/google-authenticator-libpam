@@ -1227,21 +1227,30 @@ int compute_code(const uint8_t *secret, int secretLen, unsigned long value) {
   for (int i = 8; i--; value >>= 8) {
     val[i] = value;
   }
-  uint8_t hash[SHA256_DIGEST_LENGTH];
-  int offset;
-
-  if(secretLen > 48)
-  {
-    hmac_sha256(secret, secretLen, val, 8, hash, SHA256_DIGEST_LENGTH);
-    offset = hash[SHA256_DIGEST_LENGTH - 1] & 0xF;
-  }
-  else
-  {
-    hmac_sha1(secret, secretLen, val, 8, hash, SHA1_DIGEST_LENGTH);
-    offset = hash[SHA1_DIGEST_LENGTH - 1] & 0xF;  
-  }
-
+  uint8_t hash[SHA1_DIGEST_LENGTH];
+  hmac_sha1(secret, secretLen, val, 8, hash, SHA1_DIGEST_LENGTH);
   memset(val, 0, sizeof(val));
+  const int offset = hash[SHA1_DIGEST_LENGTH - 1] & 0xF;
+  unsigned int truncatedHash = 0;
+  for (int i = 0; i < 4; ++i) {
+    truncatedHash <<= 8;
+    truncatedHash  |= hash[offset + i];
+  }
+  memset(hash, 0, sizeof(hash));
+  truncatedHash &= 0x7FFFFFFF;
+  truncatedHash %= 1000000;
+  return truncatedHash;
+}
+
+int compute_code_SHA256(const uint8_t *secret, int secretLen, unsigned long value) {
+  uint8_t val[8];
+  for (int i = 8; i--; value >>= 8) {
+    val[i] = value;
+  }
+  uint8_t hash[SHA256_DIGEST_LENGTH];
+  hmac_sha256(secret, secretLen, val, 8, hash, SHA256_DIGEST_LENGTH);
+  memset(val, 0, sizeof(val));
+  const int offset = hash[SHA256_DIGEST_LENGTH - 1] & 0xF;
   unsigned int truncatedHash = 0;
   for (int i = 0; i < 4; ++i) {
     truncatedHash <<= 8;
@@ -1426,8 +1435,12 @@ static int check_timebased_code(pam_handle_t *pamh, const char*secret_filename,
   if (!window) {
     return -1;
   }
+
+  const char* is_sha256 = get_cfg_value(pamh, "SHA256", *buf);
+  int (*compute)(const uint8_t *, int, unsigned long) = (is_sha256 != NULL) ? compute_code_SHA256 : compute_code;
+
   for (int i = -((window-1)/2); i <= window/2; ++i) {
-    const unsigned int hash = compute_code(secret, secretLen, tm + skew + i);
+    const unsigned int hash = compute(secret, secretLen, tm + skew + i);
     if (hash == (unsigned int)code) {
       return invalidate_timebased_code(tm + skew + i, pamh, secret_filename,
                                        updated, buf);
@@ -1440,13 +1453,13 @@ static int check_timebased_code(pam_handle_t *pamh, const char*secret_filename,
     // use.
     skew = 1000000;
     for (int i = 0; i < 25*60; ++i) {
-      unsigned int hash = compute_code(secret, secretLen, tm - i);
+      unsigned int hash = compute(secret, secretLen, tm - i);
       if (hash == (unsigned int)code && skew == 1000000) {
         // Don't short-circuit out of the loop as the obvious difference in
         // computation time could be a signal that is valuable to an attacker.
         skew = -i;
       }
-      hash = compute_code(secret, secretLen, tm + i);
+      hash = compute(secret, secretLen, tm + i);
       if (hash == (unsigned int)code && skew == 1000000) {
         skew = i;
       }
