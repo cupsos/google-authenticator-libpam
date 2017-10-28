@@ -172,7 +172,7 @@ static const char *urlEncode(const char *s) {
 }
 
 static const char *getURL(const char *secret, const char *label,
-                          char **encoderURL, const int use_totp, const char *issuer) {
+                          char **encoderURL, const int use_totp, const char *issuer, const short hash_mode) {
   const char *encodedLabel = urlEncode(label);
   char *url;
   const char totp = use_totp ? 't' : 'h';
@@ -190,6 +190,17 @@ static const char *getURL(const char *secret, const char *label,
       _exit(1);
     }
     free((void *)encodedIssuer);
+    free(url);
+    url = newUrl;
+  }
+
+  if (hash_mode == SHA256)
+  {
+    char *newUrl;
+    if (asprintf(&newUrl, "%s&algorithm=SHA%d", url, 256) < 0) {
+      fprintf(stderr, "String allocation failed, probably running out of memory.\n");
+      _exit(1);
+    }
     free(url);
     url = newUrl;
   }
@@ -337,12 +348,12 @@ static int displayQRCode(const char* url) {
 
 // Display to the user what they need to provision their app.
 static void displayEnrollInfo(const char *secret, const char *label,
-                              const int use_totp, const char *issuer) {
+                              const int use_totp, const char *issuer, const short hash_mode) {
   if (qr_mode == QR_NONE) {
     return;
   }
   char *encoderURL;
-  const char *url = getURL(secret, label, &encoderURL, use_totp, issuer);
+  const char *url = getURL(secret, label, &encoderURL, use_totp, issuer, hash_mode);
   printf("Warning: pasting the following URL into your browser exposes the OTP secret to Google:\n  %s\n", encoderURL);
 
   // Only newer systems have support for libqrencode. So instead of requiring
@@ -775,7 +786,7 @@ int main(int argc, char *argv[]) {
     use_totp = mode == TOTP_MODE;
   }
   if (!quiet) {
-    displayEnrollInfo(secret, label, use_totp, issuer);
+    displayEnrollInfo(secret, label, use_totp, issuer, hash_mode);
     printf("Your hash algorithm is: %s\n", hash_str[hash_mode]);
     printf("Your new secret key is: %s\n", secret);
     printf("Your verification code is %06d\n", generateCode(secret, 0, hash_mode));
