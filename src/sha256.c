@@ -1,48 +1,93 @@
 /*
  *  FIPS-180-2 compliant SHA-256 implementation
  *
- *  Copyright (C) 2001-2003  Christophe Devine
+ *  Copyright (C) 2006-2015, ARM Limited, All Rights Reserved
+ *  SPDX-License-Identifier: Apache-2.0
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may
+ *  not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
  *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ *  http://www.apache.org/licenses/LICENSE-2.0
  *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ *  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ *  This file is part of mbed TLS (https://tls.mbed.org)
+ */
+/*
+ *  The SHA-256 Secure Hash Standard was published by NIST in 2002.
+ *
+ *  http://csrc.nist.gov/publications/fips/fips180-2/fips180-2.pdf
+ */
+/*
+ *  Modified for google-authenticator-libpam
  */
 
-#include <string.h>
-
 #include "sha256.h"
+#include <string.h>
+#include <stdio.h>
+#define printf printf
 
-#define GET_UINT32(n,b,i)                       \
-{                                               \
-    (n) = ( (uint32) (b)[(i)    ] << 24 )       \
-        | ( (uint32) (b)[(i) + 1] << 16 )       \
-        | ( (uint32) (b)[(i) + 2] <<  8 )       \
-        | ( (uint32) (b)[(i) + 3]       );      \
+/*
+ * 32-bit integer manipulation macros (big endian)
+ */
+#ifndef GET_UINT32_BE
+#define GET_UINT32_BE(n,b,i)                            \
+do {                                                    \
+    (n) = ( (uint32_t) (b)[(i)    ] << 24 )             \
+        | ( (uint32_t) (b)[(i) + 1] << 16 )             \
+        | ( (uint32_t) (b)[(i) + 2] <<  8 )             \
+        | ( (uint32_t) (b)[(i) + 3]       );            \
+} while( 0 )
+#endif
+
+#ifndef PUT_UINT32_BE
+#define PUT_UINT32_BE(n,b,i)                            \
+do {                                                    \
+    (b)[(i)    ] = (unsigned char) ( (n) >> 24 );       \
+    (b)[(i) + 1] = (unsigned char) ( (n) >> 16 );       \
+    (b)[(i) + 2] = (unsigned char) ( (n) >>  8 );       \
+    (b)[(i) + 3] = (unsigned char) ( (n)       );       \
+} while( 0 )
+#endif
+
+/* Implementation that should never be optimized out by the compiler */
+static void zeroize( void *v, size_t n ) {
+    volatile unsigned char *p = v; while( n-- ) *p++ = 0;
 }
 
-#define PUT_UINT32(n,b,i)                       \
-{                                               \
-    (b)[(i)    ] = (uint8) ( (n) >> 24 );       \
-    (b)[(i) + 1] = (uint8) ( (n) >> 16 );       \
-    (b)[(i) + 2] = (uint8) ( (n) >>  8 );       \
-    (b)[(i) + 3] = (uint8) ( (n)       );       \
+void sha256_init( sha256_context *ctx )
+{
+    memset( ctx, 0, sizeof( sha256_context ) );
 }
 
-void sha256_starts( sha256_context *ctx )
+void sha256_free( sha256_context *ctx )
+{
+    if( ctx == NULL )
+        return;
+
+    zeroize( ctx, sizeof( sha256_context ) );
+}
+
+void sha256_clone( sha256_context *dst,
+                           const sha256_context *src )
+{
+    *dst = *src;
+}
+
+/*
+ * SHA-256 context setup
+ */
+void sha256_starts( sha256_context *ctx)
 {
     ctx->total[0] = 0;
     ctx->total[1] = 0;
 
+    /* SHA-256 */
     ctx->state[0] = 0x6A09E667;
     ctx->state[1] = 0xBB67AE85;
     ctx->state[2] = 0x3C6EF372;
@@ -53,27 +98,25 @@ void sha256_starts( sha256_context *ctx )
     ctx->state[7] = 0x5BE0CD19;
 }
 
-void sha256_process( sha256_context *ctx, const uint8 data[64] )
+static const uint32_t K[] =
 {
-    uint32 temp1, temp2, W[64];
-    uint32 A, B, C, D, E, F, G, H;
-
-    GET_UINT32( W[0],  data,  0 );
-    GET_UINT32( W[1],  data,  4 );
-    GET_UINT32( W[2],  data,  8 );
-    GET_UINT32( W[3],  data, 12 );
-    GET_UINT32( W[4],  data, 16 );
-    GET_UINT32( W[5],  data, 20 );
-    GET_UINT32( W[6],  data, 24 );
-    GET_UINT32( W[7],  data, 28 );
-    GET_UINT32( W[8],  data, 32 );
-    GET_UINT32( W[9],  data, 36 );
-    GET_UINT32( W[10], data, 40 );
-    GET_UINT32( W[11], data, 44 );
-    GET_UINT32( W[12], data, 48 );
-    GET_UINT32( W[13], data, 52 );
-    GET_UINT32( W[14], data, 56 );
-    GET_UINT32( W[15], data, 60 );
+    0x428A2F98, 0x71374491, 0xB5C0FBCF, 0xE9B5DBA5,
+    0x3956C25B, 0x59F111F1, 0x923F82A4, 0xAB1C5ED5,
+    0xD807AA98, 0x12835B01, 0x243185BE, 0x550C7DC3,
+    0x72BE5D74, 0x80DEB1FE, 0x9BDC06A7, 0xC19BF174,
+    0xE49B69C1, 0xEFBE4786, 0x0FC19DC6, 0x240CA1CC,
+    0x2DE92C6F, 0x4A7484AA, 0x5CB0A9DC, 0x76F988DA,
+    0x983E5152, 0xA831C66D, 0xB00327C8, 0xBF597FC7,
+    0xC6E00BF3, 0xD5A79147, 0x06CA6351, 0x14292967,
+    0x27B70A85, 0x2E1B2138, 0x4D2C6DFC, 0x53380D13,
+    0x650A7354, 0x766A0ABB, 0x81C2C92E, 0x92722C85,
+    0xA2BFE8A1, 0xA81A664B, 0xC24B8B70, 0xC76C51A3,
+    0xD192E819, 0xD6990624, 0xF40E3585, 0x106AA070,
+    0x19A4C116, 0x1E376C08, 0x2748774C, 0x34B0BCB5,
+    0x391C0CB3, 0x4ED8AA4A, 0x5B9CCA4F, 0x682E6FF3,
+    0x748F82EE, 0x78A5636F, 0x84C87814, 0x8CC70208,
+    0x90BEFFFA, 0xA4506CEB, 0xBEF9A3F7, 0xC67178F2,
+};
 
 #define  SHR(x,n) ((x & 0xFFFFFFFF) >> n)
 #define ROTR(x,n) (SHR(x,n) | (x << (32 - n)))
@@ -100,130 +143,89 @@ void sha256_process( sha256_context *ctx, const uint8 data[64] )
     d += temp1; h = temp1 + temp2;              \
 }
 
-    A = ctx->state[0];
-    B = ctx->state[1];
-    C = ctx->state[2];
-    D = ctx->state[3];
-    E = ctx->state[4];
-    F = ctx->state[5];
-    G = ctx->state[6];
-    H = ctx->state[7];
+void sha256_process( sha256_context *ctx, const unsigned char data[64] )
+{
+    uint32_t temp1, temp2, W[64];
+    uint32_t A[8];
+    unsigned int i;
 
-    P( A, B, C, D, E, F, G, H, W[ 0], 0x428A2F98 );
-    P( H, A, B, C, D, E, F, G, W[ 1], 0x71374491 );
-    P( G, H, A, B, C, D, E, F, W[ 2], 0xB5C0FBCF );
-    P( F, G, H, A, B, C, D, E, W[ 3], 0xE9B5DBA5 );
-    P( E, F, G, H, A, B, C, D, W[ 4], 0x3956C25B );
-    P( D, E, F, G, H, A, B, C, W[ 5], 0x59F111F1 );
-    P( C, D, E, F, G, H, A, B, W[ 6], 0x923F82A4 );
-    P( B, C, D, E, F, G, H, A, W[ 7], 0xAB1C5ED5 );
-    P( A, B, C, D, E, F, G, H, W[ 8], 0xD807AA98 );
-    P( H, A, B, C, D, E, F, G, W[ 9], 0x12835B01 );
-    P( G, H, A, B, C, D, E, F, W[10], 0x243185BE );
-    P( F, G, H, A, B, C, D, E, W[11], 0x550C7DC3 );
-    P( E, F, G, H, A, B, C, D, W[12], 0x72BE5D74 );
-    P( D, E, F, G, H, A, B, C, W[13], 0x80DEB1FE );
-    P( C, D, E, F, G, H, A, B, W[14], 0x9BDC06A7 );
-    P( B, C, D, E, F, G, H, A, W[15], 0xC19BF174 );
-    P( A, B, C, D, E, F, G, H, R(16), 0xE49B69C1 );
-    P( H, A, B, C, D, E, F, G, R(17), 0xEFBE4786 );
-    P( G, H, A, B, C, D, E, F, R(18), 0x0FC19DC6 );
-    P( F, G, H, A, B, C, D, E, R(19), 0x240CA1CC );
-    P( E, F, G, H, A, B, C, D, R(20), 0x2DE92C6F );
-    P( D, E, F, G, H, A, B, C, R(21), 0x4A7484AA );
-    P( C, D, E, F, G, H, A, B, R(22), 0x5CB0A9DC );
-    P( B, C, D, E, F, G, H, A, R(23), 0x76F988DA );
-    P( A, B, C, D, E, F, G, H, R(24), 0x983E5152 );
-    P( H, A, B, C, D, E, F, G, R(25), 0xA831C66D );
-    P( G, H, A, B, C, D, E, F, R(26), 0xB00327C8 );
-    P( F, G, H, A, B, C, D, E, R(27), 0xBF597FC7 );
-    P( E, F, G, H, A, B, C, D, R(28), 0xC6E00BF3 );
-    P( D, E, F, G, H, A, B, C, R(29), 0xD5A79147 );
-    P( C, D, E, F, G, H, A, B, R(30), 0x06CA6351 );
-    P( B, C, D, E, F, G, H, A, R(31), 0x14292967 );
-    P( A, B, C, D, E, F, G, H, R(32), 0x27B70A85 );
-    P( H, A, B, C, D, E, F, G, R(33), 0x2E1B2138 );
-    P( G, H, A, B, C, D, E, F, R(34), 0x4D2C6DFC );
-    P( F, G, H, A, B, C, D, E, R(35), 0x53380D13 );
-    P( E, F, G, H, A, B, C, D, R(36), 0x650A7354 );
-    P( D, E, F, G, H, A, B, C, R(37), 0x766A0ABB );
-    P( C, D, E, F, G, H, A, B, R(38), 0x81C2C92E );
-    P( B, C, D, E, F, G, H, A, R(39), 0x92722C85 );
-    P( A, B, C, D, E, F, G, H, R(40), 0xA2BFE8A1 );
-    P( H, A, B, C, D, E, F, G, R(41), 0xA81A664B );
-    P( G, H, A, B, C, D, E, F, R(42), 0xC24B8B70 );
-    P( F, G, H, A, B, C, D, E, R(43), 0xC76C51A3 );
-    P( E, F, G, H, A, B, C, D, R(44), 0xD192E819 );
-    P( D, E, F, G, H, A, B, C, R(45), 0xD6990624 );
-    P( C, D, E, F, G, H, A, B, R(46), 0xF40E3585 );
-    P( B, C, D, E, F, G, H, A, R(47), 0x106AA070 );
-    P( A, B, C, D, E, F, G, H, R(48), 0x19A4C116 );
-    P( H, A, B, C, D, E, F, G, R(49), 0x1E376C08 );
-    P( G, H, A, B, C, D, E, F, R(50), 0x2748774C );
-    P( F, G, H, A, B, C, D, E, R(51), 0x34B0BCB5 );
-    P( E, F, G, H, A, B, C, D, R(52), 0x391C0CB3 );
-    P( D, E, F, G, H, A, B, C, R(53), 0x4ED8AA4A );
-    P( C, D, E, F, G, H, A, B, R(54), 0x5B9CCA4F );
-    P( B, C, D, E, F, G, H, A, R(55), 0x682E6FF3 );
-    P( A, B, C, D, E, F, G, H, R(56), 0x748F82EE );
-    P( H, A, B, C, D, E, F, G, R(57), 0x78A5636F );
-    P( G, H, A, B, C, D, E, F, R(58), 0x84C87814 );
-    P( F, G, H, A, B, C, D, E, R(59), 0x8CC70208 );
-    P( E, F, G, H, A, B, C, D, R(60), 0x90BEFFFA );
-    P( D, E, F, G, H, A, B, C, R(61), 0xA4506CEB );
-    P( C, D, E, F, G, H, A, B, R(62), 0xBEF9A3F7 );
-    P( B, C, D, E, F, G, H, A, R(63), 0xC67178F2 );
+    for( i = 0; i < 8; i++ )
+        A[i] = ctx->state[i];
 
-    ctx->state[0] += A;
-    ctx->state[1] += B;
-    ctx->state[2] += C;
-    ctx->state[3] += D;
-    ctx->state[4] += E;
-    ctx->state[5] += F;
-    ctx->state[6] += G;
-    ctx->state[7] += H;
+    for( i = 0; i < 16; i++ )
+        GET_UINT32_BE( W[i], data, 4 * i );
+
+    for( i = 0; i < 16; i += 8 )
+    {
+        P( A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], W[i+0], K[i+0] );
+        P( A[7], A[0], A[1], A[2], A[3], A[4], A[5], A[6], W[i+1], K[i+1] );
+        P( A[6], A[7], A[0], A[1], A[2], A[3], A[4], A[5], W[i+2], K[i+2] );
+        P( A[5], A[6], A[7], A[0], A[1], A[2], A[3], A[4], W[i+3], K[i+3] );
+        P( A[4], A[5], A[6], A[7], A[0], A[1], A[2], A[3], W[i+4], K[i+4] );
+        P( A[3], A[4], A[5], A[6], A[7], A[0], A[1], A[2], W[i+5], K[i+5] );
+        P( A[2], A[3], A[4], A[5], A[6], A[7], A[0], A[1], W[i+6], K[i+6] );
+        P( A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[0], W[i+7], K[i+7] );
+    }
+
+    for( i = 16; i < 64; i += 8 )
+    {
+        P( A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], R(i+0), K[i+0] );
+        P( A[7], A[0], A[1], A[2], A[3], A[4], A[5], A[6], R(i+1), K[i+1] );
+        P( A[6], A[7], A[0], A[1], A[2], A[3], A[4], A[5], R(i+2), K[i+2] );
+        P( A[5], A[6], A[7], A[0], A[1], A[2], A[3], A[4], R(i+3), K[i+3] );
+        P( A[4], A[5], A[6], A[7], A[0], A[1], A[2], A[3], R(i+4), K[i+4] );
+        P( A[3], A[4], A[5], A[6], A[7], A[0], A[1], A[2], R(i+5), K[i+5] );
+        P( A[2], A[3], A[4], A[5], A[6], A[7], A[0], A[1], R(i+6), K[i+6] );
+        P( A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[0], R(i+7), K[i+7] );
+    }
+
+
+    for( i = 0; i < 8; i++ )
+        ctx->state[i] += A[i];
 }
 
-void sha256_update( sha256_context *ctx, const uint8 *input, uint32 length )
+/*
+ * SHA-256 process buffer
+ */
+void sha256_update( sha256_context *ctx, const unsigned char *input,
+                    size_t ilen )
 {
-    uint32 left, fill;
+    size_t fill;
+    uint32_t left;
 
-    if( ! length ) return;
+    if( ilen == 0 )
+        return;
 
     left = ctx->total[0] & 0x3F;
     fill = 64 - left;
 
-    ctx->total[0] += length;
+    ctx->total[0] += (uint32_t) ilen;
     ctx->total[0] &= 0xFFFFFFFF;
 
-    if( ctx->total[0] < length )
+    if( ctx->total[0] < (uint32_t) ilen )
         ctx->total[1]++;
 
-    if( left && length >= fill )
+    if( left && ilen >= fill )
     {
-        memcpy( (void *) (ctx->buffer + left),
-                (void *) input, fill );
+        memcpy( (void *) (ctx->buffer + left), input, fill );
         sha256_process( ctx, ctx->buffer );
-        length -= fill;
-        input  += fill;
+        input += fill;
+        ilen  -= fill;
         left = 0;
     }
 
-    while( length >= 64 )
+    while( ilen >= 64 )
     {
         sha256_process( ctx, input );
-        length -= 64;
-        input  += 64;
+        input += 64;
+        ilen  -= 64;
     }
 
-    if( length )
-    {
-        memcpy( (void *) (ctx->buffer + left),
-                (void *) input, length );
-    }
+    if( ilen > 0 )
+        memcpy( (void *) (ctx->buffer + left), input, ilen );
 }
 
-static uint8 sha256_padding[64] =
+static const unsigned char sha256_padding[64] =
 {
  0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -231,18 +233,21 @@ static uint8 sha256_padding[64] =
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-void sha256_finish( sha256_context *ctx, uint8 digest[32] )
+/*
+ * SHA-256 final digest
+ */
+void sha256_finish( sha256_context *ctx, unsigned char output[32] )
 {
-    uint32 last, padn;
-    uint32 high, low;
-    uint8 msglen[8];
+    uint32_t last, padn;
+    uint32_t high, low;
+    unsigned char msglen[8];
 
     high = ( ctx->total[0] >> 29 )
          | ( ctx->total[1] <<  3 );
     low  = ( ctx->total[0] <<  3 );
 
-    PUT_UINT32( high, msglen, 0 );
-    PUT_UINT32( low,  msglen, 4 );
+    PUT_UINT32_BE( high, msglen, 0 );
+    PUT_UINT32_BE( low,  msglen, 4 );
 
     last = ctx->total[0] & 0x3F;
     padn = ( last < 56 ) ? ( 56 - last ) : ( 120 - last );
@@ -250,120 +255,27 @@ void sha256_finish( sha256_context *ctx, uint8 digest[32] )
     sha256_update( ctx, sha256_padding, padn );
     sha256_update( ctx, msglen, 8 );
 
-    PUT_UINT32( ctx->state[0], digest,  0 );
-    PUT_UINT32( ctx->state[1], digest,  4 );
-    PUT_UINT32( ctx->state[2], digest,  8 );
-    PUT_UINT32( ctx->state[3], digest, 12 );
-    PUT_UINT32( ctx->state[4], digest, 16 );
-    PUT_UINT32( ctx->state[5], digest, 20 );
-    PUT_UINT32( ctx->state[6], digest, 24 );
-    PUT_UINT32( ctx->state[7], digest, 28 );
+    PUT_UINT32_BE( ctx->state[0], output,  0 );
+    PUT_UINT32_BE( ctx->state[1], output,  4 );
+    PUT_UINT32_BE( ctx->state[2], output,  8 );
+    PUT_UINT32_BE( ctx->state[3], output, 12 );
+    PUT_UINT32_BE( ctx->state[4], output, 16 );
+    PUT_UINT32_BE( ctx->state[5], output, 20 );
+    PUT_UINT32_BE( ctx->state[6], output, 24 );
+    PUT_UINT32_BE( ctx->state[7], output, 28 );
 }
-
-#ifdef TEST
-
-#include <stdlib.h>
-#include <stdio.h>
 
 /*
- * those are the standard FIPS-180-2 test vectors
+ * output = SHA-256( input buffer )
  */
-
-static char *msg[] = 
+void sha256( const unsigned char *input, size_t ilen,
+             unsigned char output[32])
 {
-    "abc",
-    "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
-    NULL
-};
-
-static char *val[] =
-{
-    "ba7816bf8f01cfea414140de5dae2223" \
-    "b00361a396177a9cb410ff61f20015ad",
-    "248d6a61d20638b8e5c026930c3e6039" \
-    "a33ce45964ff2167f6ecedd419db06c1",
-    "cdc76e5c9914fb9281a1c7e284d73e67" \
-    "f1809a48a497200e046d39ccc7112cd0"
-};
-
-int main( int argc, char *argv[] )
-{
-    FILE *f;
-    int i, j;
-    char output[65];
     sha256_context ctx;
-    unsigned char buf[1000];
-    unsigned char sha256sum[32];
 
-    if( argc < 2 )
-    {
-        printf( "\n SHA-256 Validation Tests:\n\n" );
-
-        for( i = 0; i < 3; i++ )
-        {
-            printf( " Test %d ", i + 1 );
-
-            sha256_starts( &ctx );
-
-            if( i < 2 )
-            {
-                sha256_update( &ctx, (uint8 *) msg[i],
-                               strlen( msg[i] ) );
-            }
-            else
-            {
-                memset( buf, 'a', 1000 );
-
-                for( j = 0; j < 1000; j++ )
-                {
-                    sha256_update( &ctx, (uint8 *) buf, 1000 );
-                }
-            }
-
-            sha256_finish( &ctx, sha256sum );
-
-            for( j = 0; j < 32; j++ )
-            {
-                sprintf( output + j * 2, "%02x", sha256sum[j] );
-            }
-
-            if( memcmp( output, val[i], 64 ) )
-            {
-                printf( "failed!\n" );
-                return( 1 );
-            }
-
-            printf( "passed.\n" );
-        }
-
-        printf( "\n" );
-    }
-    else
-    {
-        if( ! ( f = fopen( argv[1], "rb" ) ) )
-        {
-            perror( "fopen" );
-            return( 1 );
-        }
-
-        sha256_starts( &ctx );
-
-        while( ( i = fread( buf, 1, sizeof( buf ), f ) ) > 0 )
-        {
-            sha256_update( &ctx, buf, i );
-        }
-
-        sha256_finish( &ctx, sha256sum );
-
-        for( j = 0; j < 32; j++ )
-        {
-            printf( "%02x", sha256sum[j] );
-        }
-
-        printf( "  %s\n", argv[1] );
-    }
-
-    return( 0 );
+    sha256_init( &ctx );
+    sha256_starts( &ctx );
+    sha256_update( &ctx, input, ilen );
+    sha256_finish( &ctx, output );
+    sha256_free( &ctx );
 }
-
-#endif
